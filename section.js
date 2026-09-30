@@ -1,19 +1,1232 @@
-const S=window.VV_SECTION;const LABEL=S==='new_member'?'Nuovo Membro':'Extra';const $=id=>document.getElementById(id);const money=n=>Number(n).toFixed(2).replace('.',',');let products=[],orders=[],known=new Set(),modal;
-function getManagerToken(){return sessionStorage.getItem('vv_manager_token')||'';}
-function clearManagerToken(){sessionStorage.removeItem('vv_manager_token');}
-async function apiFetch(path,options={}){const headers={'Content-Type':'application/json',...(options.headers||{})};const token=getManagerToken();if(token)headers.Authorization=`Bearer ${token}`;const res=await fetch(`${VV_API_BASE}${path}`,{...options,headers});const data=await res.json().catch(()=>({}));if(res.status===401){clearManagerToken();throw new Error('SESSION_EXPIRED');}if(!res.ok)throw new Error(data.error||`Errore HTTP ${res.status}`);return data;}
-async function boot(){if(!getManagerToken())return location.href='../';modal=new bootstrap.Modal($('productModal'));$('logout').onclick=()=>{clearManagerToken();location.href='../';};$('addProduct').onclick=()=>openProduct();$('saveProduct').onclick=saveProduct;$('deleteProduct').onclick=deleteProduct;$('ordersToggle').onchange=toggleOrders;$('excel').onclick=downloadExcel;document.addEventListener('visibilitychange',()=>{if(!document.hidden)load()});await load();setInterval(load,10000);}
-async function load(){try{const [st,p,o]=await Promise.all([apiFetch(`/api/${S==='new_member'?'nuovo-membro':'extra'}/settings`),apiFetch(`/api/${S==='new_member'?'nuovo-membro':'extra'}/products`),apiFetch(`/api/${S==='new_member'?'nuovo-membro':'extra'}/orders`)]);$('ordersToggle').checked=!!st.orders_enabled;products=p.products||[];orders=o.orders||[];renderProducts();renderOrders();$('loading').classList.add('d-none');$('app').classList.remove('d-none');}catch(e){if(e.message==='SESSION_EXPIRED')return location.href='../';$('loading').textContent=e.message;}}
-function path(r){return `/api/${S==='new_member'?'nuovo-membro':'extra'}/${r}`;}
-function renderProducts(){const free=S==='new_member';$('products').innerHTML=products.length?products.map(p=>`<div class="col"><div class="card product-card h-100"><img src="${p.image||'../../logo.png'}"><div class="card-body"><h5>${esc(p.name)}</h5><div class="fw-bold text-success mb-2">${free?'GRATIS':'€ '+money(p.price)}</div><div class="small-muted mb-2">${(p.sizes||[]).join(' · ')}</div><button class="btn btn-sm btn-outline-primary" data-edit="${p.id}">Modifica</button></div></div></div>`).join(''):'<div class="col-12"><div class="alert alert-light">Nessun prodotto inserito.</div></div>';document.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>openProduct(b.dataset.edit));}
-function renderOrders(){const ids=new Set(orders.filter(o=>o.status==='nuovo').map(o=>o.id));const newIds=[...ids].filter(id=>!known.has(id));if(newIds.length&&known.size)beep();known=ids;$('newCount').textContent=ids.size;$('orders').innerHTML=orders.map(o=>`<div class="card order-card ${o.status==='nuovo'?'new-order':''} mb-3"><div class="card-body"><div class="d-flex flex-wrap justify-content-between gap-2"><div><h5 class="mb-1">${esc(o.first_name)} ${esc(o.last_name)}</h5><div class="small-muted">${new Date(o.created_at).toLocaleString('it-IT')} · ${o.status}</div></div><div class="fw-bold fs-5">€ ${money(o.total)}</div></div><ul class="mt-3 mb-2">${(o.items||[]).map(i=>`<li>${esc(i.product_name)} — taglia ${esc(i.size)} × ${i.quantity} — € ${money(i.unit_price*i.quantity)}</li>`).join('')}</ul><div class="d-flex flex-wrap gap-2">${o.status==='nuovo'?`<button class="btn btn-success btn-sm" data-complete="${o.id}">Segna completato</button>`:''}<button class="btn btn-outline-danger btn-sm" data-delete-order="${o.id}">Elimina ordine</button></div></div></div>`).join('')||'<p class="text-secondary">Nessun ordine.</p>';document.querySelectorAll('[data-complete]').forEach(b=>b.onclick=()=>completeOrder(b.dataset.complete));document.querySelectorAll('[data-delete-order]').forEach(b=>b.onclick=()=>deleteOrder(b.dataset.deleteOrder));}
-function openProduct(id){const p=products.find(x=>x.id===id);$('modalTitle').textContent=p?'Modifica prodotto':'Nuovo prodotto';$('productId').value=p?.id||'';$('productName').value=p?.name||'';$('productPrice').value=S==='new_member'?0:(p?.price??'');$('productPrice').readOnly=S==='new_member';$('productImage').value='';$('currentImage').textContent=p?.image?'Foto già presente':'Nessuna foto';$('deleteProduct').style.display=p?'block':'none';$('sizes').innerHTML=['XS','S','M','L','XL','XXL','XXXL'].map(s=>`<label class="btn btn-outline-secondary btn-sm"><input class="size-check" type="checkbox" value="${s}" ${(p?.sizes||[]).includes(s)?'checked':''}> ${s}</label>`).join('');modal.show();}
-async function saveProduct(){const name=$('productName').value.trim(),price=S==='new_member'?0:Number($('productPrice').value);if(!name||Number.isNaN(price))return alert('Inserisci nome e prezzo.');const id=$('productId').value;let image=products.find(p=>p.id===id)?.image||null;const file=$('productImage').files[0];if(file)image=await compress(file);const sizes=[...document.querySelectorAll('.size-check:checked')].map(x=>x.value);if(!sizes.length)return alert('Seleziona almeno una taglia.');const payload={id,name,price,image,sizes};try{await apiFetch(path('products'),{method:id?'PUT':'POST',body:JSON.stringify(payload)});modal.hide();load();}catch(e){alert(e.message);}}
-async function deleteProduct(){const id=$('productId').value;if(!id)return;if(!confirm('Confermi eliminazione prodotto?'))return;try{await apiFetch(`${path('products')}?id=${encodeURIComponent(id)}`,{method:'DELETE'});modal.hide();load();}catch(e){alert(e.message);}}
-async function toggleOrders(){const on=$('ordersToggle').checked;try{await apiFetch(path('settings'),{method:'PUT',body:JSON.stringify({orders_enabled:on})});load();}catch(e){alert(e.message);$('ordersToggle').checked=!on;}}
-async function completeOrder(id){try{await apiFetch(path('orders'),{method:'PUT',body:JSON.stringify({id,status:'completato'})});load();}catch(e){alert(e.message);}}
-async function deleteOrder(id){if(!confirm('1/3 — Vuoi eliminare questo ordine?'))return;if(!confirm('2/3 — Confermi che l’ordine è vecchio/completato?'))return;if(!confirm('3/3 — Eliminazione definitiva. Confermi?'))return;try{await apiFetch(`${path('orders')}?id=${encodeURIComponent(id)}`,{method:'DELETE'});load();}catch(e){alert(e.message);}}
-function beep(){try{const C=window.AudioContext||window.webkitAudioContext;if(!C)return;const c=new C(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.frequency.value=880;g.gain.value=.06;o.start();o.stop(c.currentTime+.18);}catch(e){}}
-function downloadExcel(){const out=[];for(const o of orders)for(const i of o.items||[])out.push({Data:new Date(o.created_at).toLocaleString('it-IT'),Nome:o.first_name,Cognome:o.last_name,Prodotto:i.product_name,Taglia:i.size,Quantita:i.quantity,PrezzoUnitario:Number(i.unit_price),Totale:Number(i.quantity*i.unit_price),Stato:o.status});const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(out),'Ordini');XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(orders.map(o=>({Data:new Date(o.created_at).toLocaleString('it-IT'),Nome:o.first_name,Cognome:o.last_name,Totale:Number(o.total),Stato:o.status}))),'Riepilogo');XLSX.writeFile(wb,`Vesuvio-Volley-${LABEL.replace(' ','-')}.xlsx`);}
-function compress(file){return new Promise(resolve=>{const r=new FileReader();r.onload=e=>{const im=new Image();im.onload=()=>{const max=900,scale=Math.min(1,max/Math.max(im.width,im.height));const c=document.createElement('canvas');c.width=Math.round(im.width*scale);c.height=Math.round(im.height*scale);c.getContext('2d').drawImage(im,0,0,c.width,c.height);resolve(c.toDataURL('image/jpeg',.82));};im.src=e.target.result};r.readAsDataURL(file);});}
-function esc(v){return String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}boot();
+const S = window.VV_SECTION;
+
+const LABEL =
+  S === 'new_member'
+    ? 'Nuovo Membro'
+    : 'Extra';
+
+const $ = id =>
+  document.getElementById(id);
+
+const money = n =>
+  Number(n).toFixed(2).replace('.', ',');
+
+let products = [];
+let orders = [];
+let known = new Set();
+let modal;
+
+
+/* =========================
+   AUTENTICAZIONE
+========================= */
+
+function getManagerToken() {
+  return sessionStorage.getItem(
+    'vv_manager_token'
+  ) || '';
+}
+
+function clearManagerToken() {
+  sessionStorage.removeItem(
+    'vv_manager_token'
+  );
+}
+
+
+/* =========================
+   API
+========================= */
+
+async function apiFetch(
+  path,
+  options = {}
+) {
+
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(options.headers || {})
+  };
+
+  const token =
+    getManagerToken();
+
+  if (token) {
+    headers.Authorization =
+      `Bearer ${token}`;
+  }
+
+  const res = await fetch(
+    `${VV_API_BASE}${path}`,
+    {
+      ...options,
+      headers
+    }
+  );
+
+  const data =
+    await res
+      .json()
+      .catch(() => ({}));
+
+  if (res.status === 401) {
+    clearManagerToken();
+    throw new Error(
+      'SESSION_EXPIRED'
+    );
+  }
+
+  if (!res.ok) {
+    throw new Error(
+      data.error ||
+      `Errore HTTP ${res.status}`
+    );
+  }
+
+  return data;
+}
+
+
+/* =========================
+   AVVIO
+========================= */
+
+async function boot() {
+
+  if (!getManagerToken()) {
+    return location.href = '../';
+  }
+
+  modal =
+    new bootstrap.Modal(
+      $('productModal')
+    );
+
+  $('logout').onclick = () => {
+    clearManagerToken();
+    location.href = '../';
+  };
+
+  $('addProduct').onclick =
+    () => openProduct();
+
+  $('saveProduct').onclick =
+    saveProduct;
+
+  $('deleteProduct').onclick =
+    deleteProduct;
+
+  $('ordersToggle').onchange =
+    toggleOrders;
+
+  $('excel').onclick =
+    downloadExcel;
+
+  document.addEventListener(
+    'visibilitychange',
+    () => {
+      if (!document.hidden) {
+        load();
+      }
+    }
+  );
+
+  await load();
+
+  setInterval(
+    load,
+    10000
+  );
+}
+
+
+/* =========================
+   CARICAMENTO
+========================= */
+
+async function load() {
+
+  try {
+
+    const section =
+      S === 'new_member'
+        ? 'nuovo-membro'
+        : 'extra';
+
+    const [
+      st,
+      p,
+      o
+    ] = await Promise.all([
+
+      apiFetch(
+        `/api/${section}/settings`
+      ),
+
+      apiFetch(
+        `/api/${section}/products`
+      ),
+
+      apiFetch(
+        `/api/${section}/orders`
+      )
+
+    ]);
+
+
+    $('ordersToggle').checked =
+      !!st.orders_enabled;
+
+    products =
+      p.products || [];
+
+    orders =
+      o.orders || [];
+
+
+    renderProducts();
+
+    renderOrders();
+
+
+    $('loading')
+      .classList
+      .add('d-none');
+
+    $('app')
+      .classList
+      .remove('d-none');
+
+  }
+
+  catch (e) {
+
+    if (
+      e.message ===
+      'SESSION_EXPIRED'
+    ) {
+      return location.href = '../';
+    }
+
+    $('loading').textContent =
+      e.message;
+  }
+}
+
+
+/* =========================
+   PATH API
+========================= */
+
+function path(r) {
+
+  return `/api/${
+    S === 'new_member'
+      ? 'nuovo-membro'
+      : 'extra'
+  }/${r}`;
+}
+
+
+/* =========================
+   PRODOTTI
+========================= */
+
+function renderProducts() {
+
+  const free =
+    S === 'new_member';
+
+
+  $('products').innerHTML =
+    products.length
+
+      ? products.map(p => `
+
+          <div class="col">
+
+            <div class="card product-card h-100">
+
+              <img
+                src="${
+                  p.image ||
+                  '../../logo.png'
+                }"
+              >
+
+              <div class="card-body">
+
+                <h5>
+                  ${esc(p.name)}
+                </h5>
+
+                <div
+                  class="fw-bold text-success mb-2"
+                >
+                  ${
+                    free
+                      ? 'GRATIS'
+                      : '€ ' + money(p.price)
+                  }
+                </div>
+
+                <div
+                  class="small-muted mb-2"
+                >
+                  ${
+                    (p.sizes || [])
+                      .join(' · ')
+                  }
+                </div>
+
+                <button
+                  class="btn btn-sm btn-outline-primary"
+                  data-edit="${p.id}"
+                >
+                  Modifica
+                </button>
+
+              </div>
+
+            </div>
+
+          </div>
+
+        `).join('')
+
+      : `
+
+        <div class="col-12">
+
+          <div class="alert alert-light">
+            Nessun prodotto inserito.
+          </div>
+
+        </div>
+
+      `;
+
+
+  document
+    .querySelectorAll('[data-edit]')
+    .forEach(b => {
+
+      b.onclick = () =>
+        openProduct(
+          b.dataset.edit
+        );
+
+    });
+}
+
+
+/* =========================
+   ORDINI
+========================= */
+
+function renderOrders() {
+
+  const ids =
+    new Set(
+      orders
+        .filter(
+          o => o.status === 'nuovo'
+        )
+        .map(o => o.id)
+    );
+
+
+  const newIds =
+    [...ids].filter(
+      id => !known.has(id)
+    );
+
+
+  if (
+    newIds.length &&
+    known.size
+  ) {
+    beep();
+  }
+
+
+  known = ids;
+
+
+  $('newCount').textContent =
+    ids.size;
+
+
+  $('orders').innerHTML =
+
+    orders.map(o => `
+
+      <div
+        class="card order-card ${
+          o.status === 'nuovo'
+            ? 'new-order'
+            : ''
+        } mb-3"
+      >
+
+        <div class="card-body">
+
+          <div
+            class="d-flex flex-wrap justify-content-between gap-2"
+          >
+
+            <div>
+
+              <h5 class="mb-1">
+
+                ${esc(o.first_name)}
+                ${esc(o.last_name)}
+
+              </h5>
+
+
+              ${
+                o.order_number
+                  ? `
+                    <div
+                      class="fw-bold text-primary"
+                    >
+                      Numero:
+                      ${esc(o.order_number)}
+                    </div>
+                  `
+                  : ''
+              }
+
+
+              <div class="small-muted">
+
+                ${
+                  new Date(
+                    o.created_at
+                  ).toLocaleString(
+                    'it-IT'
+                  )
+                }
+
+                ·
+
+                ${esc(o.status)}
+
+              </div>
+
+            </div>
+
+
+            <div
+              class="fw-bold fs-5"
+            >
+              € ${money(o.total)}
+            </div>
+
+          </div>
+
+
+          <ul
+            class="mt-3 mb-2"
+          >
+
+            ${
+              (o.items || [])
+                .map(i => `
+
+                  <li>
+
+                    ${esc(
+                      i.product_name
+                    )}
+
+                    —
+
+                    taglia
+                    ${esc(i.size)}
+
+                    ×
+                    ${i.quantity}
+
+                    —
+
+                    €
+                    ${money(
+                      i.unit_price *
+                      i.quantity
+                    )}
+
+                  </li>
+
+                `)
+                .join('')
+            }
+
+          </ul>
+
+
+          <div
+            class="d-flex flex-wrap gap-2"
+          >
+
+            ${
+              o.status === 'nuovo'
+
+                ? `
+
+                  <button
+                    class="btn btn-success btn-sm"
+                    data-complete="${o.id}"
+                  >
+                    Segna completato
+                  </button>
+
+                `
+
+                : ''
+            }
+
+
+            <button
+              class="btn btn-outline-danger btn-sm"
+              data-delete-order="${o.id}"
+            >
+              Elimina ordine
+            </button>
+
+          </div>
+
+        </div>
+
+      </div>
+
+    `).join('')
+
+    ||
+
+    '<p class="text-secondary">Nessun ordine.</p>';
+
+
+  document
+    .querySelectorAll(
+      '[data-complete]'
+    )
+    .forEach(b => {
+
+      b.onclick = () =>
+        completeOrder(
+          b.dataset.complete
+        );
+
+    });
+
+
+  document
+    .querySelectorAll(
+      '[data-delete-order]'
+    )
+    .forEach(b => {
+
+      b.onclick = () =>
+        deleteOrder(
+          b.dataset.deleteOrder
+        );
+
+    });
+}
+
+
+/* =========================
+   PRODOTTO
+========================= */
+
+function openProduct(id) {
+
+  const p =
+    products.find(
+      x => x.id === id
+    );
+
+
+  $('modalTitle').textContent =
+    p
+      ? 'Modifica prodotto'
+      : 'Nuovo prodotto';
+
+
+  $('productId').value =
+    p?.id || '';
+
+
+  $('productName').value =
+    p?.name || '';
+
+
+  $('productPrice').value =
+    S === 'new_member'
+      ? 0
+      : (p?.price ?? '');
+
+
+  $('productPrice').readOnly =
+    S === 'new_member';
+
+
+  $('productImage').value =
+    '';
+
+
+  $('currentImage').textContent =
+    p?.image
+      ? 'Foto già presente'
+      : 'Nessuna foto';
+
+
+  $('deleteProduct').style.display =
+    p
+      ? 'block'
+      : 'none';
+
+
+  $('sizes').innerHTML =
+    [
+      'XS',
+      'S',
+      'M',
+      'L',
+      'XL',
+      'XXL',
+      'XXXL'
+    ]
+      .map(s => `
+
+        <label
+          class="btn btn-outline-secondary btn-sm"
+        >
+
+          <input
+            class="size-check"
+            type="checkbox"
+            value="${s}"
+            ${
+              (p?.sizes || [])
+                .includes(s)
+                ? 'checked'
+                : ''
+            }
+          >
+
+          ${s}
+
+        </label>
+
+      `)
+      .join('');
+
+
+  modal.show();
+}
+
+
+/* =========================
+   SALVA PRODOTTO
+========================= */
+
+async function saveProduct() {
+
+  const name =
+    $('productName')
+      .value
+      .trim();
+
+
+  const price =
+    S === 'new_member'
+      ? 0
+      : Number(
+          $('productPrice').value
+        );
+
+
+  if (
+    !name ||
+    Number.isNaN(price)
+  ) {
+
+    return alert(
+      'Inserisci nome e prezzo.'
+    );
+  }
+
+
+  const id =
+    $('productId').value;
+
+
+  let image =
+    products.find(
+      p => p.id === id
+    )?.image || null;
+
+
+  const file =
+    $('productImage')
+      .files[0];
+
+
+  if (file) {
+    image =
+      await compress(file);
+  }
+
+
+  const sizes =
+    [
+      ...document.querySelectorAll(
+        '.size-check:checked'
+      )
+    ].map(
+      x => x.value
+    );
+
+
+  if (!sizes.length) {
+
+    return alert(
+      'Seleziona almeno una taglia.'
+    );
+  }
+
+
+  const payload = {
+    id,
+    name,
+    price,
+    image,
+    sizes
+  };
+
+
+  try {
+
+    await apiFetch(
+      path('products'),
+      {
+        method:
+          id ? 'PUT' : 'POST',
+
+        body:
+          JSON.stringify(
+            payload
+          )
+      }
+    );
+
+
+    modal.hide();
+
+    load();
+
+  }
+
+  catch (e) {
+
+    alert(e.message);
+
+  }
+}
+
+
+/* =========================
+   ELIMINA PRODOTTO
+========================= */
+
+async function deleteProduct() {
+
+  const id =
+    $('productId').value;
+
+
+  if (!id) return;
+
+
+  if (
+    !confirm(
+      'Confermi eliminazione prodotto?'
+    )
+  ) {
+    return;
+  }
+
+
+  try {
+
+    await apiFetch(
+      `${path('products')}?id=${
+        encodeURIComponent(id)
+      }`,
+      {
+        method: 'DELETE'
+      }
+    );
+
+
+    modal.hide();
+
+    load();
+
+  }
+
+  catch (e) {
+
+    alert(e.message);
+
+  }
+}
+
+
+/* =========================
+   ON / OFF ORDINI
+========================= */
+
+async function toggleOrders() {
+
+  const on =
+    $('ordersToggle').checked;
+
+
+  try {
+
+    await apiFetch(
+      path('settings'),
+      {
+        method: 'PUT',
+
+        body:
+          JSON.stringify({
+            orders_enabled: on
+          })
+      }
+    );
+
+
+    load();
+
+  }
+
+  catch (e) {
+
+    alert(e.message);
+
+    $('ordersToggle').checked =
+      !on;
+  }
+}
+
+
+/* =========================
+   COMPLETA ORDINE
+========================= */
+
+async function completeOrder(id) {
+
+  try {
+
+    await apiFetch(
+      path('orders'),
+      {
+        method: 'PUT',
+
+        body:
+          JSON.stringify({
+            id,
+            status:
+              'completato'
+          })
+      }
+    );
+
+
+    load();
+
+  }
+
+  catch (e) {
+
+    alert(e.message);
+
+  }
+}
+
+
+/* =========================
+   ELIMINA ORDINE
+========================= */
+
+async function deleteOrder(id) {
+
+  if (
+    !confirm(
+      '1/3 — Vuoi eliminare questo ordine?'
+    )
+  ) {
+    return;
+  }
+
+
+  if (
+    !confirm(
+      '2/3 — Confermi che l’ordine è vecchio/completato?'
+    )
+  ) {
+    return;
+  }
+
+
+  if (
+    !confirm(
+      '3/3 — Eliminazione definitiva. Confermi?'
+    )
+  ) {
+    return;
+  }
+
+
+  try {
+
+    await apiFetch(
+      `${path('orders')}?id=${
+        encodeURIComponent(id)
+      }`,
+      {
+        method: 'DELETE'
+      }
+    );
+
+
+    load();
+
+  }
+
+  catch (e) {
+
+    alert(e.message);
+
+  }
+}
+
+
+/* =========================
+   SUONO NUOVO ORDINE
+========================= */
+
+function beep() {
+
+  try {
+
+    const C =
+      window.AudioContext ||
+      window.webkitAudioContext;
+
+
+    if (!C) return;
+
+
+    const c =
+      new C();
+
+
+    const o =
+      c.createOscillator();
+
+
+    const g =
+      c.createGain();
+
+
+    o.connect(g);
+
+    g.connect(
+      c.destination
+    );
+
+
+    o.frequency.value =
+      880;
+
+
+    g.gain.value =
+      .06;
+
+
+    o.start();
+
+
+    o.stop(
+      c.currentTime +
+      .18
+    );
+
+  }
+
+  catch (e) {}
+
+}
+
+
+/* =========================
+   EXCEL
+========================= */
+
+function downloadExcel() {
+
+  const out = [];
+
+
+  for (
+    const o of orders
+  ) {
+
+    for (
+      const i
+      of o.items || []
+    ) {
+
+      out.push({
+
+        Numero:
+          o.order_number || '',
+
+        Data:
+          new Date(
+            o.created_at
+          ).toLocaleString(
+            'it-IT'
+          ),
+
+        Nome:
+          o.first_name,
+
+        Cognome:
+          o.last_name,
+
+        Prodotto:
+          i.product_name,
+
+        Taglia:
+          i.size,
+
+        Quantita:
+          i.quantity,
+
+        PrezzoUnitario:
+          Number(
+            i.unit_price
+          ),
+
+        Totale:
+          Number(
+            i.quantity *
+            i.unit_price
+          ),
+
+        Stato:
+          o.status
+
+      });
+
+    }
+
+  }
+
+
+  const wb =
+    XLSX.utils.book_new();
+
+
+  XLSX.utils.book_append_sheet(
+    wb,
+    XLSX.utils.json_to_sheet(
+      out
+    ),
+    'Ordini'
+  );
+
+
+  const riepilogo =
+    orders.map(o => ({
+
+      Numero:
+        o.order_number || '',
+
+      Data:
+        new Date(
+          o.created_at
+        ).toLocaleString(
+          'it-IT'
+        ),
+
+      Nome:
+        o.first_name,
+
+      Cognome:
+        o.last_name,
+
+      Totale:
+        Number(
+          o.total
+        ),
+
+      Stato:
+        o.status
+
+    }));
+
+
+  XLSX.utils.book_append_sheet(
+
+    wb,
+
+    XLSX.utils.json_to_sheet(
+      riepilogo
+    ),
+
+    'Riepilogo'
+
+  );
+
+
+  XLSX.writeFile(
+
+    wb,
+
+    `Vesuvio-Volley-${
+      LABEL.replace(
+        ' ',
+        '-'
+      )
+    }.xlsx`
+
+  );
+}
+
+
+/* =========================
+   COMPRESSIONE FOTO
+========================= */
+
+function compress(file) {
+
+  return new Promise(
+    resolve => {
+
+      const r =
+        new FileReader();
+
+
+      r.onload =
+        e => {
+
+          const im =
+            new Image();
+
+
+          im.onload =
+            () => {
+
+              const max =
+                900;
+
+
+              const scale =
+                Math.min(
+                  1,
+                  max /
+                    Math.max(
+                      im.width,
+                      im.height
+                    )
+                );
+
+
+              const c =
+                document.createElement(
+                  'canvas'
+                );
+
+
+              c.width =
+                Math.round(
+                  im.width *
+                  scale
+                );
+
+
+              c.height =
+                Math.round(
+                  im.height *
+                  scale
+                );
+
+
+              c
+                .getContext('2d')
+                .drawImage(
+                  im,
+                  0,
+                  0,
+                  c.width,
+                  c.height
+                );
+
+
+              resolve(
+                c.toDataURL(
+                  'image/jpeg',
+                  .82
+                )
+              );
+
+            };
+
+
+          im.src =
+            e.target.result;
+
+        };
+
+
+      r.readAsDataURL(file);
+
+    }
+  );
+}
+
+
+/* =========================
+   ESCAPE HTML
+========================= */
+
+function esc(v) {
+
+  return String(
+    v ?? ''
+  ).replace(
+    /[&<>'"]/g,
+    c => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      "'": '&#39;',
+      '"': '&quot;'
+    }[c])
+  );
+}
+
+
+/* =========================
+   AVVIO AUTOMATICO
+========================= */
+
+boot();
